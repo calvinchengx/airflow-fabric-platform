@@ -50,6 +50,38 @@ for _ in $(seq 1 60); do
   sleep 2
 done
 
+# THE AUDIENCES THIS PLATFORM CAN MINT. A PLATFORM CONCERN, not a product one.
+#
+# Real Entra can already issue for Azure SQL in every tenant: it is a
+# first-party resource and no registration exists to perform. This emulator
+# mints only for audiences it knows, so the non-default one is registered here
+# -- a setup difference, resolved by the platform exactly like the connections
+# below, so no product code learns that a registration was ever needed.
+#
+# Without it a Warehouse token request fails with a bare HTTP 400 from the
+# token endpoint, and the first thing that notices is dbt-fabric reporting
+# `Invalid authorization specification` -- which reads like a bad credential
+# rather than an audience the issuer was never told about.
+python3 - <<'PY' || echo "platform: WARNING -- could not register the Azure SQL audience"
+import json, os, urllib.error, urllib.request
+
+# The token URL is per-tenant; the admin API sits at the origin.
+root = "/".join(os.environ["ENTRA_TOKEN_URL"].split("/")[:3])
+body = json.dumps({"displayName": "Azure SQL",
+                   "appIdUri": "https://database.windows.net",
+                   "isConfidential": False}).encode()
+req = urllib.request.Request(f"{root}/admin/api/apps", data=body,
+                             headers={"Content-Type": "application/json"})
+try:
+    with urllib.request.urlopen(req, timeout=30) as r:
+        print(f"platform: audience https://database.windows.net registered ({r.status})")
+except urllib.error.HTTPError as e:
+    # 409 is the normal case on a restart against a warm emulator.
+    if e.code != 409:
+        raise
+    print("platform: audience https://database.windows.net already registered")
+PY
+
 # THE SEAM. The product's DAGs say conn_id="fabric" and nothing else -- no
 # host, no tenant, no grant type. Here that resolves to the emulator; in
 # production the same conn_id is provisioned against real Fabric and not one
