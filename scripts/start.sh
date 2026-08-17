@@ -43,5 +43,43 @@ PY
 )" >/dev/null
 echo "platform: connection 'fabric' provisioned -> ${FABRIC_API_ROOT}"
 
+# ONE CONNECTION PER DECLARED VENDOR. The product's DAG asks for these by the
+# name the declaration gives them and learns nothing else -- so in production
+# the same names are provisioned against the real vendors and no DAG changes.
+if [ -f "${SOURCES_DECL:-/nonexistent}" ]; then
+  python3 - <<'PYEOF'
+import json, os, pathlib, subprocess
+decl = pathlib.Path(os.environ["SOURCES_DECL"])
+root = decl.parent
+vendors, cur = [], None
+for raw in decl.read_text().splitlines():
+    line = raw.split("#", 1)[0].rstrip()
+    if not line.strip() or line.strip() == "vendors:" or line.startswith("version:"):
+        continue
+    t = line.strip()
+    if t.startswith("- "):
+        cur = {}; vendors.append(cur); t = t[2:]
+    if cur is None or ":" not in t:
+        continue
+    k, _, v = t.partition(":")
+    cur[k.strip()] = v.strip()
+for v in vendors:
+    if v.get("kind") != "openapi":
+        continue
+    host = f"http://{v['name'].replace('_','-')}:{v['port']}"
+    # The vendor's own credential, from its fixture directory. Each vendor has
+    # its own key that rotates separately -- that is the point of there being
+    # more than one vendor, and sharing one here would erase it.
+    key_file = root / v["data"] / ".api-key"
+    key = key_file.read_text().strip() if key_file.exists() else ""
+    subprocess.run(["airflow", "connections", "delete", v["conn"]],
+                   capture_output=True)
+    subprocess.run(["airflow", "connections", "add", v["conn"],
+                    "--conn-type", "http", "--conn-host", host,
+                    "--conn-password", key], check=True, capture_output=True)
+    print(f"platform: connection {v['conn']!r} provisioned -> {host}", flush=True)
+PYEOF
+fi
+
 echo "platform: ready. Airflow UI on :8080 (published as ${AIRFLOW_PORT:-18080})"
 wait -n

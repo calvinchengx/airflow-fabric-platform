@@ -87,6 +87,7 @@ services:
       ENTRA_CLIENT_ID: "${ENTRA_CLIENT_ID:-00d88624-f0d7-46f6-a641-6232c2608928}"
       ENTRA_CLIENT_SECRET: "${ENTRA_CLIENT_SECRET:-daemon-app-secret}"
       FABRIC_TARGET: emulator
+      SOURCES_DECL: /sources/sources.yaml
       # No ambient Azure credential chain. A component that cannot find its
       # credentials must FAIL, not fall through to DefaultAzureCredential and
       # authenticate against real Azure -- which is what dlt's built-in
@@ -101,6 +102,9 @@ services:
       - "${AIRFLOW_PORT:-18080}:8080"
     volumes:
       - ${PRODUCT:-./product}:/opt/product:ro
+      # The vendor declaration and their API keys. The platform reads a sources
+      # repo to learn which Connections to provision; it never writes there.
+      - ${SOURCES:-./sources}:/sources:ro
     command: ["bash", "-lc", "/opt/platform/start.sh"]
     configs:
       - source: start_sh

@@ -5,23 +5,36 @@
 # fact rather than an aspiration.
 SHELL := /bin/bash
 PRODUCT ?= ./product
+SOURCES ?= ../contoso-sources
 PROJECT ?= airflow-fabric
 export PRODUCT_ABS := $(abspath $(PRODUCT))
+export SOURCES_ABS := $(abspath $(SOURCES))
 export PRODUCT_NAME := $(notdir $(PRODUCT_ABS))
 include versions.env
 export
 
-COMPOSE := PRODUCT=$(PRODUCT_ABS) PRODUCT_NAME=$(PRODUCT_NAME) PWD=$(CURDIR) \
-           docker compose -p $(PROJECT) -f docker-compose.yml
+FRAGMENT := .sources.generated.yml
+COMPOSE := PRODUCT=$(PRODUCT_ABS) PRODUCT_NAME=$(PRODUCT_NAME) SOURCES=$(SOURCES_ABS) PWD=$(CURDIR) \
+           docker compose -p $(PROJECT) -f docker-compose.yml -f $(FRAGMENT)
 
 .PHONY: help up down logs connections doctor
 help: ## This list
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t20
 
-up: doctor ## Build the worker from the product's pyproject.toml and start the stack
+up: doctor sources ## Build the worker from the product's pyproject.toml and start the stack
 	@echo "platform: product = $(PRODUCT_ABS)"
+	@echo "platform: sources = $(SOURCES_ABS)"
 	$(COMPOSE) up --build -d
 	@echo "platform: Airflow on http://localhost:$${AIRFLOW_PORT:-18080}"
+
+sources: ## Generate the compose fragment for the vendors a sources repo declares
+	@test -f "$(SOURCES_ABS)/sources.yaml" || { \
+	  echo "no sources.yaml at $(SOURCES_ABS) -- the product's vendors cannot be started"; exit 1; }
+	@python3 scripts/sources.py "$(SOURCES_ABS)/sources.yaml" "$(SOURCES_ABS)" > $(FRAGMENT)
+	@echo "platform: $$(python3 -c "import json;print(len(json.load(open('$(FRAGMENT)'))['services']))") vendor(s) declared"
+
+trigger: ## Trigger a DAG and wait:  make trigger DAG=contoso_daily
+	$(COMPOSE) exec -T airflow airflow dags trigger $(DAG)
 
 down: ## Stop and remove everything, volumes included
 	$(COMPOSE) down -v
