@@ -177,6 +177,15 @@ services:
       FABRIC_API_ROOT: "https://api.fabric.microsoft.com:9443"
       FABRIC_ONELAKE_URL: "https://api.fabric.microsoft.com:9443"
       FABRIC_ONELAKE_HOST_HEADER: "onelake.dfs.fabric.microsoft.com"
+      # THE SAME STORAGE OPTIONS THE `fabric` CONNECTION CARRIES, for the
+      # environment constructor. A product witness builds its target from env
+      # rather than from a Connection precisely so it can run outside a DAG --
+      # and if the two constructors disagree, the witness stops exercising what
+      # the DAG does, which is the one property that makes a witness worth
+      # anything. Same values, stated once per route by this platform.
+      FABRIC_STORAGE_OPTIONS: >-
+        {"azure_endpoint": "https://api.fabric.microsoft.com:9443/onelake",
+         "azure_allow_invalid_certificates": "true"}
       # The emulator's own cert, shared read-only. Every HTTPS client in the
       # worker -- requests, urllib, dbt -- trusts THIS file rather than
       # disabling verification, so the TLS path is genuinely exercised.

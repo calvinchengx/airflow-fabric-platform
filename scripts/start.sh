@@ -103,6 +103,21 @@ print(json.dumps({
     "token_url": os.environ["ENTRA_TOKEN_URL"],
     "client_id": os.environ["ENTRA_CLIENT_ID"],
     "client_secret": os.environ["ENTRA_CLIENT_SECRET"],
+    # WHAT delta-rs NEEDS TO REACH THIS OneLake, stated by the platform
+    # because it is a property of THIS deployment. The product merges these
+    # into its storage options without inspecting them, so the same product
+    # code runs against real Fabric -- which supplies none of this and gets
+    # the default Azure endpoint and ordinary certificate validation.
+    #
+    # `azure_allow_invalid_certificates` is here and nowhere else: the
+    # emulator serves a self-signed certificate and object_store has no
+    # CA-bundle option, so this is a narrow allowance for one client rather
+    # than verification being turned off for the worker -- which would also
+    # silence a genuine failure.
+    "storage_options": {
+        "azure_endpoint": os.environ["FABRIC_ONELAKE_URL"].rstrip("/") + "/onelake",
+        "azure_allow_invalid_certificates": "true",
+    },
     "target": os.environ.get("FABRIC_TARGET", "emulator"),
 }))
 PY
