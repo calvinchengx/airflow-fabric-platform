@@ -53,14 +53,14 @@ def _load(path: pathlib.Path) -> dict:
     return {"vendors": vendors}
 
 
-def fragment(decl: dict, sources_dir: str, mokapi_version: str) -> dict:
+def fragment(decl: dict, sources_dir: str, pins: dict) -> dict:
     services: dict = {}
     for v in decl["vendors"]:
         name = v["name"].replace("_", "-")
         kind = v.get("kind")
         if kind == "openapi":
             services[name] = {
-                "image": f"mokapi/mokapi:{mokapi_version}",
+                "image": f"mokapi/mokapi:{pins['MOKAPI_VERSION']}",
                 # The dashboard retains every request AND its response body. For
                 # a large export that is a multi-hundred-MB copy per call, so the
                 # history is capped at one entry per API -- the reason this flag
@@ -74,12 +74,104 @@ def fragment(decl: dict, sources_dir: str, mokapi_version: str) -> dict:
                 "expose": [str(v["port"])],
             }
         elif kind == "cdc":
-            # Deliberately unimplemented rather than approximated. The ERP's
-            # point is that history arrives as a CHANGE STREAM; standing up a
-            # plain Postgres here would serve rows, possibly even the right
-            # count, while testing something else entirely.
-            print(f"platform: vendor {v['name']!r} is kind=cdc, not yet supported "
-                  f"by this platform -- skipping", file=sys.stderr)
+            # THREE SERVICES, because a change stream needs all three and any
+            # two of them is a snapshot wearing a stream's name. The database
+            # holds the rows, Debezium reads its write-ahead log, and the broker
+            # carries what Debezium produced. Standing up only Postgres would
+            # serve rows -- possibly even the right count -- while testing
+            # something else entirely.
+            db, broker, connect = f"{name}-db", f"{name}-broker", f"{name}-connect"
+            services[db] = {
+                "image": f"postgres:{pins['POSTGRES_VERSION']}",
+                # LOGICAL replication, and the slots to hold it. Debezium reads
+                # the WAL; at the default `replica` level there is nothing in it
+                # for a decoder to read and the connector attaches to silence.
+                "command": ["postgres", "-c", "wal_level=logical",
+                            "-c", "max_replication_slots=4", "-c", "max_wal_senders=4"],
+                "environment": {"POSTGRES_USER": v.get("db_user", "contoso"),
+                                "POSTGRES_PASSWORD": v.get("db_password", "contoso-erp-dev"),
+                                "POSTGRES_DB": v.get("db_name", "erp")},
+                "healthcheck": {
+                    "test": ["CMD-SHELL",
+                             f"pg_isready -U {v.get('db_user','contoso')} -d {v.get('db_name','erp')}"],
+                    "interval": "5s", "timeout": "3s", "retries": 20},
+                "volumes": [f"{sources_dir}:/sources:ro"],
+            }
+            services[broker] = {
+                "image": f"docker.redpanda.com/redpandadata/redpanda:{pins['REDPANDA_VERSION']}",
+                "command": ["redpanda", "start", "--mode=dev-container", "--smp=1",
+                            f"--kafka-addr=INTERNAL://0.0.0.0:9092",
+                            f"--advertise-kafka-addr=INTERNAL://{broker}:9092"],
+                "healthcheck": {"test": ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"],
+                                "interval": "5s", "timeout": "5s", "retries": 30},
+            }
+            if v.get("seed"):
+                services[f"{name}-seed"] = {
+                    "image": f"python:{pins.get('PYTHON_VERSION', '3.12')}-slim",
+                    "depends_on": {db: {"condition": "service_healthy"},
+                                   connect: {"condition": "service_healthy"}},
+                    "environment": {
+                        "ERP_DSN": (f"host={db} port=5432 dbname={v.get('db_name','erp')} "
+                                    f"user={v.get('db_user','contoso')} "
+                                    f"password={v.get('db_password','contoso-erp-dev')}"),
+                        "ERP_CONNECT_URL": f"http://{connect}:8083",
+                        "ERP_DB_HOST": db,
+                        "PYTHONUNBUFFERED": "1",
+                    },
+                    "volumes": [f"{sources_dir}:/sources:rw"],
+                    "working_dir": "/sources",
+                    # Installs the vendor's own generators, then runs its seeder.
+                    # `restart: no` and a one-shot command: this is a step, not
+                    # a service, and it must not loop if the replay fails.
+                    # ONE INTERPRETER throughout. fixtures.py installs the
+                    # generators into the project venv `uv sync` creates, so
+                    # running the seeder with the system python afterwards
+                    # cannot see them -- which is exactly the
+                    # `ModuleNotFoundError: No module named 'erp_system'` this
+                    # command produced on its first run. `uv run` puts both on
+                    # the same side of that line.
+                    "command": ["sh", "-c",
+                                "pip install --quiet uv && "
+                                "uv sync --quiet && "
+                                # --frozen --no-sync, and it is load-bearing.
+                                # A bare `uv run` RE-SYNCS and prunes anything
+                                # not in the lock -- evicting the generators and
+                                # psycopg that the two lines above just
+                                # installed, then failing with
+                                # ModuleNotFoundError for a package that was
+                                # present moments earlier. The sibling platform
+                                # documents this exact trap in its Makefile.
+                                "uv run --frozen --no-sync python scripts/fixtures.py && "
+                                # AFTER fixtures.py, never before. That script
+                                # calls `uv sync` ITSELF to guarantee a venv,
+                                # and a sync prunes everything absent from the
+                                # lock -- so a psycopg installed first is gone
+                                # by the time the seeder imports it, which is
+                                # what `ModuleNotFoundError: No module named
+                                # 'psycopg'` meant on two separate runs. The
+                                # --frozen --no-sync flags above stop the two
+                                # `uv run` calls from pruning; they cannot stop
+                                # a sync the script performs internally.
+                                "uv pip install --quiet 'psycopg[binary]' && "
+                                "uv run --frozen --no-sync python scripts/seed_erp.py"],
+                    "restart": "no",
+                }
+            services[connect] = {
+                "image": f"debezium/connect:{pins['DEBEZIUM_VERSION']}",
+                "depends_on": {db: {"condition": "service_healthy"},
+                               broker: {"condition": "service_healthy"}},
+                "environment": {
+                    "BOOTSTRAP_SERVERS": f"{broker}:9092",
+                    "GROUP_ID": v["name"],
+                    "CONFIG_STORAGE_TOPIC": "_connect_configs",
+                    "OFFSET_STORAGE_TOPIC": "_connect_offsets",
+                    "STATUS_STORAGE_TOPIC": "_connect_status",
+                    "CONFIG_STORAGE_REPLICATION_FACTOR": "1",
+                    "OFFSET_STORAGE_REPLICATION_FACTOR": "1",
+                    "STATUS_STORAGE_REPLICATION_FACTOR": "1"},
+                "healthcheck": {"test": ["CMD-SHELL", "curl -sf http://localhost:8083/connectors || exit 1"],
+                                "interval": "10s", "timeout": "5s", "retries": 30},
+            }
         else:
             raise SystemExit(
                 f"platform: vendor {v['name']!r} declares kind={kind!r}, which this "
@@ -103,11 +195,19 @@ def main() -> int:
         line.split("=", 1) for line in versions.read_text().splitlines()
         if "=" in line and not line.strip().startswith("#")
     ) if versions.exists() else {}
-    mokapi = pins.get("MOKAPI_VERSION")
-    if not mokapi:
-        sys.exit(f"platform: {versions} does not pin MOKAPI_VERSION, and this "
-                 f"platform will not guess a vendor simulator's version")
-    print(json.dumps(fragment(decl, sys.argv[2], mokapi.strip()), indent=2))
+    pins = {k.strip(): val.strip() for k, val in pins.items()}
+    # Every image this platform starts on a product's behalf is pinned by the
+    # SOURCES repo. A platform defaulting any of them would be deciding what
+    # the vendor is -- and a guessed tag fails at pull time with `manifest
+    # unknown`, which is how this check came to exist.
+    needed = {"openapi": ["MOKAPI_VERSION"],
+              "cdc": ["POSTGRES_VERSION", "REDPANDA_VERSION", "DEBEZIUM_VERSION"]}
+    for v in decl["vendors"]:
+        for key in needed.get(v.get("kind"), []):
+            if key not in pins:
+                sys.exit(f"platform: vendor {v['name']!r} is kind={v.get('kind')!r} but "
+                         f"{versions} does not pin {key}; this platform will not guess it")
+    print(json.dumps(fragment(decl, sys.argv[2], pins), indent=2))
     return 0
 
 

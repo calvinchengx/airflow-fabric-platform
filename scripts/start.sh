@@ -72,6 +72,25 @@ for raw in decl.read_text().splitlines():
     k, _, v = t.partition(":")
     cur[k.strip()] = v.strip()
 for v in vendors:
+    if v.get("kind") == "cdc":
+        # A stream vendor has no base URL. Its broker and topic ride in the
+        # connection extra the way an HTTP vendor's URL rides in its host --
+        # same seam, so in production these point at the real ERP's stream and
+        # no DAG changes.
+        name = v["name"].replace("_", "-")
+        subprocess.run(["airflow", "connections", "delete", v["conn"]],
+                       capture_output=True)
+        r = subprocess.run(["airflow", "connections", "add", v["conn"],
+                            "--conn-type", "generic",
+                            "--conn-extra", json.dumps({
+                                "bootstrap": f"{name}-broker:9092",
+                                "topic": v.get("topic", ""),
+                            })], capture_output=True, text=True)
+        print(f"platform: connection {v['conn']!r} -> {name}-broker:9092 "
+              f"({v.get('topic')})" if r.returncode == 0 else
+              f"platform: WARNING could not provision {v['conn']!r}: "
+              f"{(r.stderr or r.stdout).strip()[:200]}", flush=True)
+        continue
     if v.get("kind") != "openapi":
         continue
     host = f"http://{v['name'].replace('_','-')}:{v['port']}"
