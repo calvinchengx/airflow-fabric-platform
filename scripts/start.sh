@@ -3,6 +3,32 @@
 # for by name. Everything here is platform business; the product never sees it.
 set -euo pipefail
 
+# A COMBINED trust bundle: the system CAs PLUS the emulator's certificate.
+#
+# Pointing SSL_CERT_FILE at the emulator cert alone REPLACES the system store
+# for every Python client in this container, so public HTTPS breaks -- measured:
+# `dbt deps` could not reach hub.getdbt.com with CERTIFICATE_VERIFY_FAILED. The
+# emulator has to be ADDED to what is already trusted, not substituted for it.
+if [ -f /emu-data/tls/cert.pem ]; then
+  python3 - <<'CAEOF'
+import pathlib
+import ssl
+
+out = pathlib.Path("/tmp/ca-bundle.pem")
+emulator = pathlib.Path("/emu-data/tls/cert.pem").read_text()
+# certifi if present, else the interpreter's own default store. Either way the
+# emulator is APPENDED to what is already trusted, never substituted for it.
+try:
+    import certifi
+    system = pathlib.Path(certifi.where()).read_text()
+except Exception:  # noqa: BLE001 -- no certifi in this image
+    default = ssl.get_default_verify_paths().cafile
+    system = pathlib.Path(default).read_text() if default else ""
+out.write_text(system + "\n" + emulator)
+print(f"platform: trust bundle = system CAs + emulator cert ({out})", flush=True)
+CAEOF
+fi
+
 airflow db migrate >/dev/null
 
 # api-server FIRST: in Airflow 3 the scheduler hands tasks to it over HTTP and
@@ -50,6 +76,19 @@ print(json.dumps({
 PY
 )" >/dev/null
 echo "platform: connection 'fabric' provisioned -> ${FABRIC_API_ROOT}"
+
+# The WAREHOUSE, as its own connection. Separate from `fabric` because it is a
+# different protocol to a different surface: TDS to a SQL endpoint, not REST to
+# a control plane. A product asking for `fabric_warehouse` gets a host and a
+# port; the token it authenticates with is minted from the same credential, so
+# production points this at a real Warehouse and no dbt profile changes.
+airflow connections delete fabric_warehouse >/dev/null 2>&1 || true
+airflow connections add fabric_warehouse \
+  --conn-type generic \
+  --conn-host "${FABRIC_TDS_HOST:-fabric-emulator}" \
+  --conn-port "${FABRIC_TDS_PORT:-1433}" \
+  --conn-extra "{\"token_url\": \"${ENTRA_TOKEN_URL}\", \"client_id\": \"${ENTRA_CLIENT_ID}\", \"client_secret\": \"${ENTRA_CLIENT_SECRET}\"}" >/dev/null
+echo "platform: connection 'fabric_warehouse' provisioned -> ${FABRIC_TDS_HOST:-fabric-emulator}:${FABRIC_TDS_PORT:-1433}"
 
 # ONE CONNECTION PER DECLARED VENDOR. The product's DAG asks for these by the
 # name the declaration gives them and learns nothing else -- so in production
