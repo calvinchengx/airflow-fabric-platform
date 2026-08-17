@@ -1,0 +1,112 @@
+# The platform: Apache Airflow 3 + a Fabric target. Names no product.
+#
+# The product arrives two ways, and they are DIFFERENT MECHANISMS that people
+# routinely conflate:
+#
+#   its DAG FILES      -> a bundle (bind mount here, GitDagBundle in production)
+#   its DEPENDENCIES   -> uv pip install of its pyproject.toml into the worker
+#
+# The bundle delivers files and installs nothing. A product whose DAGs import a
+# library the worker lacks parses fine and fails at run time.
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-16}
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 3s
+      retries: 20
+
+  entra-emulator:
+    image: ghcr.io/calvinchengx/entra-emulator:${ENTRA_EMULATOR_VERSION:-0.8.1}
+    environment:
+      ORIGIN_MODE: compat
+      TLS_ENABLED: "false"
+      PORT: "8443"
+      PUBLIC_ORIGIN: "http://entra-emulator:8443"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/entra-emulator", "healthcheck"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  # The Fabric target. In production this service does not exist and the
+  # connections point at real Fabric instead; nothing else differs.
+  fabric-emulator:
+    image: ghcr.io/calvinchengx/fabric-emulator:${FABRIC_EMULATOR_VERSION:-0.28.0}@${FABRIC_EMULATOR_DIGEST:-sha256:9cdc8d14d4940360a21d6aab06ae1afc0ca2b1689d5b5a02f3e0e4f0b74c371c}
+    depends_on:
+      entra-emulator: {condition: service_healthy}
+    environment:
+      FABRIC_ADDR: ":80"
+      FABRIC_DISABLE_TLS: "true"
+      FABRIC_ENTRA_ISSUER: "http://entra-emulator:8443/${ENTRA_TENANT:-6f89cf12-978b-4d23-ac18-9ef0c127cf87}/v2.0"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/fabric-emulator", "healthcheck"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  airflow:
+    build:
+      context: ${PRODUCT:-./product}/..
+      dockerfile: ${PWD}/Dockerfile.worker
+      args:
+        AIRFLOW_VERSION: ${AIRFLOW_VERSION:-3.3.1}
+        PRODUCT_DIR: ${PRODUCT_NAME:-product}
+    depends_on:
+      postgres: {condition: service_healthy}
+      fabric-emulator: {condition: service_healthy}
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      # THE BUNDLE. Rooted at the product's `dags/` SUBDIRECTORY, which is the
+      # production shape too -- GitDagBundle takes a subdir the same way.
+      AIRFLOW__DAG_PROCESSOR__DAG_BUNDLE_CONFIG_LIST: >-
+        [{"name":"product","classpath":"airflow.dag_processing.bundles.local.LocalDagBundle","kwargs":{"path":"/opt/product/dags"}}]
+      AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "5"
+      # AIRFLOW 3 RUNS TASKS THROUGH THE API SERVER, not the metadata DB. A
+      # stack without api-server fails every task with
+      # `httpcore.ConnectError: [Errno 111] Connection refused` -- measured, on
+      # the first run of this platform's own probe. This is the Task SDK
+      # boundary made operational and it is a real break from Airflow 2.
+      AIRFLOW__API__BASE_URL: "http://localhost:8080"
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://localhost:8080/execution/"
+      AIRFLOW__API_AUTH__JWT_SECRET: "${AIRFLOW_JWT_SECRET:-local-dev-not-a-secret}"
+      # WHERE THE TARGET IS. The product reads these through a Connection and
+      # never learns which target answered. In production they are absent and
+      # the connection points at real Fabric.
+      FABRIC_API_ROOT: "http://fabric-emulator"
+      FABRIC_ONELAKE_URL: "http://fabric-emulator"
+      FABRIC_ONELAKE_HOST_HEADER: "onelake.dfs.fabric.microsoft.com"
+      ENTRA_TOKEN_URL: "http://entra-emulator:8443/${ENTRA_TENANT:-6f89cf12-978b-4d23-ac18-9ef0c127cf87}/oauth2/v2.0/token"
+      ENTRA_CLIENT_ID: "${ENTRA_CLIENT_ID:-00d88624-f0d7-46f6-a641-6232c2608928}"
+      ENTRA_CLIENT_SECRET: "${ENTRA_CLIENT_SECRET:-daemon-app-secret}"
+      FABRIC_TARGET: emulator
+      # No ambient Azure credential chain. A component that cannot find its
+      # credentials must FAIL, not fall through to DefaultAzureCredential and
+      # authenticate against real Azure -- which is what dlt's built-in
+      # destinations did during Phase 0, reaching real Microsoft endpoints with
+      # the developer's own az login state.
+      AZURE_CLIENT_ID: ""
+      AZURE_TENANT_ID: ""
+      AZURE_CLIENT_SECRET: ""
+      MSI_ENDPOINT: ""
+      IDENTITY_ENDPOINT: ""
+    ports:
+      - "${AIRFLOW_PORT:-18080}:8080"
+    volumes:
+      - ${PRODUCT:-./product}:/opt/product:ro
+    command: ["bash", "-lc", "/opt/platform/start.sh"]
+    configs:
+      - source: start_sh
+        target: /opt/platform/start.sh
+        mode: 0755
+
+configs:
+  start_sh:
+    file: ./scripts/start.sh

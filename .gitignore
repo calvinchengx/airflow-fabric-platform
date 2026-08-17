@@ -1,0 +1,3 @@
+product
+*.pyc
+__pycache__/

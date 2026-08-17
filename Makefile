@@ -1,0 +1,41 @@
+# The platform, driven from a product repo:  make up PRODUCT=../my-product
+#
+# PRODUCT is a PATH, not a name. This Makefile contains no product identifier,
+# which is the property that makes "a second product can use this unchanged" a
+# fact rather than an aspiration.
+SHELL := /bin/bash
+PRODUCT ?= ./product
+PROJECT ?= airflow-fabric
+export PRODUCT_ABS := $(abspath $(PRODUCT))
+export PRODUCT_NAME := $(notdir $(PRODUCT_ABS))
+include versions.env
+export
+
+COMPOSE := PRODUCT=$(PRODUCT_ABS) PRODUCT_NAME=$(PRODUCT_NAME) PWD=$(CURDIR) \
+           docker compose -p $(PROJECT) -f docker-compose.yml
+
+.PHONY: help up down logs connections doctor
+help: ## This list
+	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t20
+
+up: doctor ## Build the worker from the product's pyproject.toml and start the stack
+	@echo "platform: product = $(PRODUCT_ABS)"
+	$(COMPOSE) up --build -d
+	@echo "platform: Airflow on http://localhost:$${AIRFLOW_PORT:-18080}"
+
+down: ## Stop and remove everything, volumes included
+	$(COMPOSE) down -v
+
+logs: ## Follow the Airflow logs
+	$(COMPOSE) logs -f airflow
+
+connections: ## Show the connections the product can ask for by name
+	$(COMPOSE) exec airflow airflow connections list
+
+doctor: ## Refuse to start against a product that cannot work
+	@test -d "$(PRODUCT_ABS)" || { echo "no product at $(PRODUCT_ABS)"; exit 1; }
+	@test -f "$(PRODUCT_ABS)/pyproject.toml" || { \
+	  echo "$(PRODUCT_ABS) has no pyproject.toml -- the worker would install nothing"; exit 1; }
+	@test -d "$(PRODUCT_ABS)/dags" || { \
+	  echo "$(PRODUCT_ABS) has no dags/ -- the bundle would be empty"; exit 1; }
+	@echo "platform: $(PRODUCT_NAME) provides pyproject.toml and dags/"

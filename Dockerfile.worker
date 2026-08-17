@@ -1,0 +1,12 @@
+# The ENTIRE product-specific surface of this platform: three lines that install
+# whatever `pyproject.toml` the product supplies. No package is named here.
+#
+# uv rather than pip because the Airflow image already ships it
+# (/home/airflow/.local/bin/uv), and `sys.prefix` is writable by the `airflow`
+# user -- so this is the image's native tooling, not a workaround. There is no
+# requirements.txt in either repo.
+ARG AIRFLOW_VERSION=3.3.1
+FROM apache/airflow:${AIRFLOW_VERSION}
+ARG PRODUCT_DIR=product
+COPY --chown=airflow ${PRODUCT_DIR}/pyproject.toml /opt/product/
+RUN uv pip install --python /home/airflow/.local/bin/python -r /opt/product/pyproject.toml
