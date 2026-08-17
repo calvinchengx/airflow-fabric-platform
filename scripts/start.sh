@@ -72,12 +72,25 @@ for v in vendors:
     # more than one vendor, and sharing one here would erase it.
     key_file = root / v["data"] / ".api-key"
     key = key_file.read_text().strip() if key_file.exists() else ""
+    # IDEMPOTENT, and LOUD when it fails. Provisioning runs on every start
+    # against a metadata DB that may already carry these -- an existing
+    # connection is the normal case on restart, not an error. It used to be
+    # both: `check=True` under `set -e` meant a second `make up` killed the
+    # entire platform, and `capture_output` hid the reason.
     subprocess.run(["airflow", "connections", "delete", v["conn"]],
                    capture_output=True)
-    subprocess.run(["airflow", "connections", "add", v["conn"],
-                    "--conn-type", "http", "--conn-host", host,
-                    "--conn-password", key], check=True, capture_output=True)
-    print(f"platform: connection {v['conn']!r} provisioned -> {host}", flush=True)
+    r = subprocess.run(["airflow", "connections", "add", v["conn"],
+                        "--conn-type", "http", "--conn-host", host,
+                        "--conn-password", key],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        # Report and carry on: one vendor that cannot be provisioned should
+        # fail ITS OWN tasks with a missing-connection error, not prevent the
+        # platform from starting at all.
+        print(f"platform: WARNING could not provision {v['conn']!r}: "
+              f"{(r.stderr or r.stdout).strip()[:300]}", flush=True)
+    else:
+        print(f"platform: connection {v['conn']!r} provisioned -> {host}", flush=True)
 PYEOF
 fi
 

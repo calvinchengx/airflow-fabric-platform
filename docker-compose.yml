@@ -51,7 +51,7 @@ services:
 
   airflow:
     build:
-      context: ${PRODUCT:-./product}/..
+      context: ${PRODUCT}/..
       dockerfile: ${PWD}/Dockerfile.worker
       args:
         AIRFLOW_VERSION: ${AIRFLOW_VERSION:-3.3.1}
@@ -77,6 +77,14 @@ services:
       AIRFLOW__API__BASE_URL: "http://localhost:8080"
       AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://localhost:8080/execution/"
       AIRFLOW__API_AUTH__JWT_SECRET: "${AIRFLOW_JWT_SECRET:-local-dev-not-a-secret}"
+      # PINNED, and it has to be. Airflow INVENTS a Fernet key when none is set,
+      # while postgres keeps the connections it encrypted with the previous one
+      # -- so the first `make up` works and every one after it fails with
+      # `cryptography.fernet.InvalidToken` on any stored credential. The symptom
+      # is unprovisionable connections, which reads like a provisioning bug.
+      # Production supplies its own key; this default is for local only and is
+      # deliberately not a secret.
+      AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY:-Zp8kRr7vQ2mN4xJ6wL9tY3bV5cX1aS0dF7gH8jK2lM4=}"
       # WHERE THE TARGET IS. The product reads these through a Connection and
       # never learns which target answered. In production they are absent and
       # the connection points at real Fabric.
@@ -101,10 +109,10 @@ services:
     ports:
       - "${AIRFLOW_PORT:-18080}:8080"
     volumes:
-      - ${PRODUCT:-./product}:/opt/product:ro
+      - ${PRODUCT:?set PRODUCT to a data product repo, or run via make up}:/opt/product:ro
       # The vendor declaration and their API keys. The platform reads a sources
       # repo to learn which Connections to provision; it never writes there.
-      - ${SOURCES:-./sources}:/sources:ro
+      - ${SOURCES:?set SOURCES to a sources repo, or run via make up}:/sources:ro
     command: ["bash", "-lc", "/opt/platform/start.sh"]
     configs:
       - source: start_sh

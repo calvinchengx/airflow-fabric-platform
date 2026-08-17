@@ -51,4 +51,9 @@ doctor: ## Refuse to start against a product that cannot work
 	  echo "$(PRODUCT_ABS) has no pyproject.toml -- the worker would install nothing"; exit 1; }
 	@test -d "$(PRODUCT_ABS)/dags" || { \
 	  echo "$(PRODUCT_ABS) has no dags/ -- the bundle would be empty"; exit 1; }
+	@grep -q "^\[build-system\]" "$(PRODUCT_ABS)/pyproject.toml" || { \
+	  echo "$(PRODUCT_ABS)/pyproject.toml has no [build-system] -- it declares"; \
+	  echo "  dependencies but is not an installable package, so its own modules"; \
+	  echo "  would be missing from the worker and every DAG importing them would"; \
+	  echo "  fail at run time with ModuleNotFoundError."; exit 1; }
 	@echo "platform: $(PRODUCT_NAME) provides pyproject.toml and dags/"

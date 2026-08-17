@@ -1,12 +1,18 @@
-# The ENTIRE product-specific surface of this platform: three lines that install
-# whatever `pyproject.toml` the product supplies. No package is named here.
+# The ENTIRE product-specific surface of this platform. It names no package:
+# whatever the product's pyproject.toml declares is what gets installed.
 #
-# uv rather than pip because the Airflow image already ships it
-# (/home/airflow/.local/bin/uv), and `sys.prefix` is writable by the `airflow`
-# user -- so this is the image's native tooling, not a workaround. There is no
-# requirements.txt in either repo.
+# TWO THINGS, NOT ONE, and conflating them is a trap this platform fell into
+# once already. `uv pip install -r pyproject.toml` installs the DEPENDENCY LIST
+# and nothing else -- the product's own package is not among its dependencies,
+# so a DAG importing it dies at run time with ModuleNotFoundError while the
+# bundle, the deps and the parse all look healthy. Installing the PROJECT
+# (`uv pip install /opt/build`) brings the dependencies with it.
+#
+# Built from a copy at /opt/build rather than from /opt/product, because
+# /opt/product is a read-only bind mount at run time and installing from a path
+# that is later shadowed would make it unclear which code actually ran.
 ARG AIRFLOW_VERSION=3.3.1
 FROM apache/airflow:${AIRFLOW_VERSION}
 ARG PRODUCT_DIR=product
-COPY --chown=airflow ${PRODUCT_DIR}/pyproject.toml /opt/product/
-RUN uv pip install --python /home/airflow/.local/bin/python -r /opt/product/pyproject.toml
+COPY --chown=airflow ${PRODUCT_DIR}/ /opt/build/
+RUN uv pip install --python /home/airflow/.local/bin/python /opt/build
