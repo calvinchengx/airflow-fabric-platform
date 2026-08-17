@@ -7,9 +7,17 @@ airflow db migrate >/dev/null
 
 # api-server FIRST: in Airflow 3 the scheduler hands tasks to it over HTTP and
 # a worker with nothing listening fails every task with `Connection refused`.
+# ORDER MATTERS, and getting it wrong is a race a restart loses every time.
+# The scheduler must not start until the connections exist: this DAG ships
+# unpaused with a daily schedule, so the moment the dag-processor finds it the
+# scheduler fires a run -- measured at FOUR SECONDS after container start,
+# against a platform that had provisioned nothing. The task then failed with
+# `The conn_id 'fabric' isn't defined`, which reads like a fault in the product
+# rather than a platform that was not ready yet.
+#
+# api-server first because tasks execute through it and the CLI below wants it
+# live; scheduler and dag-processor last, once there is something to run against.
 airflow api-server &
-airflow scheduler &
-airflow dag-processor &
 
 for _ in $(seq 1 60); do
   curl -sf http://localhost:8080/api/v2/monitor/health >/dev/null 2>&1 && break
@@ -93,6 +101,10 @@ for v in vendors:
         print(f"platform: connection {v['conn']!r} provisioned -> {host}", flush=True)
 PYEOF
 fi
+
+# Only now is it safe to let anything run.
+airflow scheduler &
+airflow dag-processor &
 
 echo "platform: ready. Airflow UI on :8080 (published as ${AIRFLOW_PORT:-18080})"
 wait -n
