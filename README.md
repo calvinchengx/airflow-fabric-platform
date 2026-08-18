@@ -13,7 +13,13 @@ Point it at a data product repository and it runs that one:
 
 ```sh
 make up PRODUCT=../contoso-data-product-fabric-airflow3
+make creds          # the Airflow login — generated, not configured
 ```
+
+`make help` lists the rest. The admin password is **generated on first start**
+by Airflow 3's simple auth manager rather than set here, so there is nothing to
+look up in this repository — and it changes whenever the container is recreated,
+which is the usual reason a saved one stops working.
 
 ## Why this is its own repository
 
