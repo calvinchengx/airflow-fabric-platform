@@ -12,7 +12,7 @@ models, and no product name anywhere in it.
 Point it at a data product repository and it runs that one:
 
 ```sh
-make up PRODUCT=../contoso-airflow-data-product
+make up PRODUCT=../contoso-data-product-fabric-airflow3
 ```
 
 ## Why this is its own repository
