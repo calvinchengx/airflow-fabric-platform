@@ -1,5 +1,10 @@
 # airflow-fabric-platform
 
+[![CI](https://github.com/calvinchengx/airflow-fabric-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/calvinchengx/airflow-fabric-platform/actions/workflows/ci.yml)
+[![Airflow 3.3.1](https://img.shields.io/badge/Apache_Airflow-3.3.1-017CEE?logo=apacheairflow&logoColor=white)](versions.env)
+[![fabric-emulator 0.28.0](https://img.shields.io/badge/fabric--emulator-0.28.0-6264A7)](versions.env)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
 **The platform, and nothing else.** Apache Airflow 3 plus a Fabric target, as a
 thing you can pin. It contains no data product: no DAGs, no dlt sources, no dbt
 models, and no product name anywhere in it.
