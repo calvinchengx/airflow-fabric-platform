@@ -21,7 +21,7 @@ services:
       retries: 20
 
   entra-emulator:
-    image: ghcr.io/calvinchengx/entra-emulator:${ENTRA_EMULATOR_VERSION:-0.8.1}
+    image: ghcr.io/calvinchengx/entra-emulator:${ENTRA_EMULATOR_VERSION:?see versions.env}
     environment:
       ORIGIN_MODE: compat
       TLS_ENABLED: "false"
@@ -56,7 +56,7 @@ services:
   # The Fabric target. In production this service does not exist and the
   # connections point at real Fabric instead; nothing else differs.
   fabric-emulator:
-    image: ghcr.io/calvinchengx/fabric-emulator:${FABRIC_EMULATOR_VERSION:-0.28.0}@${FABRIC_EMULATOR_DIGEST:-sha256:9cdc8d14d4940360a21d6aab06ae1afc0ca2b1689d5b5a02f3e0e4f0b74c371c}
+    image: ghcr.io/calvinchengx/fabric-emulator:${FABRIC_EMULATOR_VERSION:?see versions.env}@${FABRIC_EMULATOR_DIGEST:?see versions.env}
     depends_on:
       entra-emulator: {condition: service_healthy}
       sqlserver: {condition: service_healthy}
@@ -104,7 +104,7 @@ services:
   # the agent executes on Sail over Spark Connect. So the worker stays
   # Spark-free while silver is still built by a real engine.
   sail:
-    image: ghcr.io/calvinchengx/emulator-sail:${SAIL_ENGINE_VERSION}@${SAIL_ENGINE_DIGEST}
+    image: ghcr.io/calvinchengx/emulator-sail:${SAIL_ENGINE_VERSION:?see versions.env}@${SAIL_ENGINE_DIGEST:?see versions.env}
     depends_on:
       fabric-emulator: {condition: service_healthy}
     environment:
@@ -119,7 +119,7 @@ services:
       SAIL_SPARK__SESSION_TIMEOUT_SECS: "3600"
 
   spark-agent:
-    image: ghcr.io/calvinchengx/emulator-spark-agent:${SPARK_CLIENT_VERSION}@${SPARK_CLIENT_DIGEST}
+    image: ghcr.io/calvinchengx/emulator-spark-agent:${SPARK_CLIENT_VERSION:?see versions.env}@${SPARK_CLIENT_DIGEST:?see versions.env}
     depends_on:
       sail: {condition: service_started}
     environment:
