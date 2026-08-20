@@ -1,0 +1,104 @@
+# Does a PUBLISHED fabric-emulator still carry this platform end to end?
+#
+# CI proves what this repository owns; this proves what it CONSUMES. The
+# emulator ships on its own cadence, and until now nothing here noticed a
+# release at all: the pin moved when somebody remembered, and
+# `fabric-platform-notebook-pipelines` was the only Fabric platform the
+# emulator's release told anything.
+name: Acceptance
+
+on:
+  # Fired by fabric-emulator's release workflow.
+  repository_dispatch:
+    types: [fabric-emulator-release]
+  # THE GUARD, and it is not belt-and-braces. A dispatch that silently fails to
+  # fire (revoked token, renamed event type, a workflow auto-disabled after 60
+  # days of inactivity) is indistinguishable from one that fired and passed.
+  # The schedule makes that absence loud within a day.
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Verify the released emulator end to end
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: fabric-platform-airflow3
+    # To push the adopted pin back. The repository default is read-only and a
+    # job that only reads should stay that way; this one does not.
+    permissions:
+      contents: write
+    steps:
+      # Full history and a usable token: the default checkout is a depth-1
+      # detached HEAD, which cannot rebase onto a main that moved during the run.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          path: fabric-platform-airflow3
+      # THE VENDORS. `make sources` reads `sources.yaml` from a sources repo and
+      # generates the compose fragment; without this checkout it exits naming the
+      # missing file rather than starting a stack with no vendors.
+      - uses: actions/checkout@v7
+        with:
+          repository: calvinchengx/contoso-sources
+          path: contoso-sources
+      # THE PRODUCT. This platform carries none: PRODUCT is a path, and the
+      # Makefile contains no product identifier by design.
+      - uses: actions/checkout@v7
+        with:
+          repository: calvinchengx/contoso-data-product-fabric-airflow3
+          path: contoso-data-product-fabric-airflow3
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.32"
+      # VERIFY THE RELEASE THAT FIRED, not the pin in the checkout. A dispatch
+      # for 0.33.0 that ran against the 0.32.0 in versions.env would report
+      # success, in the emulator's own release history, for a release nobody
+      # tested.
+      #
+      # `set_release.py` moves the DIGESTS too, which is the part that matters
+      # here: measured on v0.29.0, all three digests moved while two of the three
+      # tags stayed exactly where they were. A version-only bump would run a new
+      # emulator against the previous release's Sail and statement agent.
+      #
+      # Only on dispatch. The schedule verifies the existing pin, which is the
+      # other thing worth knowing: does the version we claim to support still
+      # work today?
+      - if: github.event_name == 'repository_dispatch'
+        name: Point at the released version
+        run: |
+          python3 scripts/set_release.py "${{ github.event.client_payload.version }}"
+          git --no-pager diff --stat versions.env
+      - run: make up PRODUCT=../contoso-data-product-fabric-airflow3 SOURCES=../contoso-sources
+      - run: make verify DAG=contoso_daily PRODUCT=../contoso-data-product-fabric-airflow3 SOURCES=../contoso-sources
+      # ADOPT WHAT THIS RUN JUST PROVED. Everything above ran against the
+      # dispatched version, so by here the pin has been verified end to end and
+      # is sitting uncommitted in the working tree. Discarding it and asking a
+      # human to retype it is the only thing between a verified release and an
+      # adopted one.
+      #
+      # No `if: always()`. A step with no condition runs only when every step
+      # before it passed, which is exactly the gate wanted: a red run leaves the
+      # pin where it is.
+      - if: github.event_name == 'repository_dispatch'
+        name: Adopt the version this run just verified
+        env:
+          VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet versions.env; then
+            echo "already pinned at $VERSION; nothing to adopt"
+            exit 0
+          fi
+          git commit -qm "pin $VERSION, adopted by the acceptance run that verified it" versions.env
+          # main can move during the run; without the rebase the push races and
+          # the release looks broken for a reason unrelated to the release.
+          git pull --rebase --quiet origin main
+          git push origin HEAD:main
+          echo "adopted $VERSION" >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        run: make down
