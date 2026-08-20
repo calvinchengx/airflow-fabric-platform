@@ -86,8 +86,6 @@ services:
   # connections point at real Fabric instead; nothing else differs.
   fabric-emulator:
     mem_limit: 2g
-    environment:
-      GOMEMLIMIT: "1600MiB"
     image: ghcr.io/calvinchengx/fabric-emulator:${FABRIC_EMULATOR_VERSION:?see versions.env}@${FABRIC_EMULATOR_DIGEST:?see versions.env}
     depends_on:
       entra-emulator: {condition: service_healthy}
@@ -102,6 +100,9 @@ services:
     # makes it survive a restart -- without it each boot mints a new cert and
     # every client's trust store is stale.
     environment:
+      # Go does not read its cgroup, so the ceiling must be told to the
+      # runtime as well as to Docker -- G31's lesson, G38's casualty.
+      GOMEMLIMIT: "1600MiB"
       FABRIC_ADDR: ":9443"
       FABRIC_DATA_DIR: "/data"
       # The Warehouse surface. Without these the emulator serves no TDS at all
