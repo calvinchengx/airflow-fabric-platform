@@ -69,7 +69,25 @@ def fragment(decl: dict, sources_dir: str, pins: dict) -> dict:
                             f"/sources/{v['spec']}", f"/sources/{v['script']}"],
                 # Go does not read the cgroup limit; without GOMEMLIMIT the heap
                 # climbs past mem_limit and the container dies mid-response.
-                "environment": {"GOMEMLIMIT": "2GiB"},
+                # THE mem_limit THIS COMMENT ASSUMED DID NOT EXIST until G38:
+                # the ceiling was told to Go and never to Docker, so the host
+                # killed this container instead -- measured, `contoso-pos`
+                # Exited(137) OOMKilled mid-witness, surfacing as a vendor
+                # extraction failure two layers away.
+                # GOMEMLIMIT IS A SOFT TARGET and mem_limit is a hard kill, so
+                # the gap between them is Go's room to collect before Docker
+                # intervenes. 2GiB under a 2560m cap left 400MB of headroom and
+                # died serving the orders export -- measured, `OOM=true
+                # limit=2684354560`, mid-pagination.
+                #
+                # SIZED FROM THE WRONG MOMENT the first time: `docker stats`
+                # showed this vendor at 159MiB, which is what it costs while
+                # IDLE. A mokapi service holds request and response bodies, and
+                # the export is 176MB of CSV per call, so its peak is an order
+                # of magnitude above its resting size. A ceiling read off a
+                # quiet stack is not a ceiling.
+                "environment": {"GOMEMLIMIT": "3GiB"},
+                "mem_limit": "4g",
                 "volumes": [f"{sources_dir}:/sources:ro"],
                 "expose": [str(v["port"])],
             }
@@ -83,6 +101,7 @@ def fragment(decl: dict, sources_dir: str, pins: dict) -> dict:
             db, broker, connect = f"{name}-db", f"{name}-broker", f"{name}-connect"
             services[db] = {
                 "image": f"postgres:{pins['POSTGRES_VERSION']}",
+                "mem_limit": "512m",
                 # LOGICAL replication, and the slots to hold it. Debezium reads
                 # the WAL; at the default `replica` level there is nothing in it
                 # for a decoder to read and the connector attaches to silence.
@@ -99,7 +118,13 @@ def fragment(decl: dict, sources_dir: str, pins: dict) -> dict:
             }
             services[broker] = {
                 "image": f"docker.redpanda.com/redpandadata/redpanda:{pins['REDPANDA_VERSION']}",
+                # `--memory` is redpanda's OWN ceiling, and it is not optional
+                # alongside mem_limit: seastar reserves against what it thinks
+                # the machine has, so an uncapped broker sizes itself to the
+                # host and dies at the cgroup edge instead of shedding.
+                "mem_limit": "1536m",
                 "command": ["redpanda", "start", "--mode=dev-container", "--smp=1",
+                            "--memory=1G", "--reserve-memory=0M",
                             f"--kafka-addr=INTERNAL://0.0.0.0:9092",
                             f"--advertise-kafka-addr=INTERNAL://{broker}:9092"],
                 "healthcheck": {"test": ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"],
@@ -160,7 +185,11 @@ def fragment(decl: dict, sources_dir: str, pins: dict) -> dict:
                 "image": f"debezium/connect:{pins['DEBEZIUM_VERSION']}",
                 "depends_on": {db: {"condition": "service_healthy"},
                                broker: {"condition": "service_healthy"}},
+                # A JVM: the cgroup cap alone is what G31 proved insufficient,
+                # so the heap is bounded too.
+                "mem_limit": "1536m",
                 "environment": {
+                    "JAVA_OPTS": "-Xmx900m -XX:MaxMetaspaceSize=256m",
                     "BOOTSTRAP_SERVERS": f"{broker}:9092",
                     "GROUP_ID": v["name"],
                     "CONFIG_STORAGE_TOPIC": "_connect_configs",
