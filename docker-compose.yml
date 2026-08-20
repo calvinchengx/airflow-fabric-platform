@@ -8,8 +8,35 @@
 #
 # The bundle delivers files and installs nothing. A product whose DAGs import a
 # library the worker lacks parses fine and fails at run time.
+# MEMORY CEILINGS, and why every service has one (G38).
+#
+# Docker has 16 GB and several stacks share it. Without a limit a container
+# sizes itself against the WHOLE machine, so the host's OOM killer picks
+# whichever is largest at the moment -- which is never the one at fault. In one
+# evening that took `fabric-emulator` twice and `contoso-pos` once, and each
+# arrived disguised: phantom missing tables in dbt, a provisioning timeout, a
+# vendor extraction failure. Three layers from the cause, every time.
+#
+# The limits are containment, not tuning: roughly 2x measured peak, so a
+# container that dies hit ITS OWN ceiling and says so. Sized from
+# `docker stats` during a real run rather than guessed.
+#
+# THEY SUM TO MORE THAN THE MACHINE HAS, deliberately, and the arithmetic is
+# not the point. A mem_limit is a CEILING, not a reservation -- nothing is set
+# aside, and this stack idles around 4 GB. What the ceilings buy is that no
+# single container can grow without bound, so a stack under pressure fails at
+# a named service instead of the host shooting whichever process happened to
+# be largest. Sizing them to fit in 16 GB would mean capping below observed
+# peaks, which converts a rare shared-host OOM into a reliable self-OOM.
+#
+# AND A CGROUP LIMIT ALONE IS NOT ENOUGH -- that is G31's lesson, where Unity
+# Catalog's JVM read the host's RAM and aborted under an unbounded heap. A
+# runtime that does not read its cgroup needs its own ceiling told to it: Go
+# wants GOMEMLIMIT, a JVM wants -Xmx, SQL Server wants MSSQL_MEMORY_LIMIT_MB
+# (already set here, and the mem_limit below is what makes it enforceable).
 services:
   postgres:
+    mem_limit: 512m
     image: postgres:${POSTGRES_VERSION:-16}
     environment:
       POSTGRES_USER: airflow
@@ -21,6 +48,7 @@ services:
       retries: 20
 
   entra-emulator:
+    mem_limit: 512m
     image: ghcr.io/calvinchengx/entra-emulator:${ENTRA_EMULATOR_VERSION:?see versions.env}
     environment:
       ORIGIN_MODE: compat
@@ -39,6 +67,7 @@ services:
   # can drive it unmodified. In production this service does not exist: the
   # Warehouse is Fabric's own.
   sqlserver:
+    mem_limit: 3g
     image: mcr.microsoft.com/mssql/server:${MSSQL_VERSION:-2022-latest}
     platform: linux/amd64
     environment:
@@ -56,6 +85,9 @@ services:
   # The Fabric target. In production this service does not exist and the
   # connections point at real Fabric instead; nothing else differs.
   fabric-emulator:
+    mem_limit: 2g
+    environment:
+      GOMEMLIMIT: "1600MiB"
     image: ghcr.io/calvinchengx/fabric-emulator:${FABRIC_EMULATOR_VERSION:?see versions.env}@${FABRIC_EMULATOR_DIGEST:?see versions.env}
     depends_on:
       entra-emulator: {condition: service_healthy}
@@ -104,6 +136,7 @@ services:
   # the agent executes on Sail over Spark Connect. So the worker stays
   # Spark-free while silver is still built by a real engine.
   sail:
+    mem_limit: 2g
     image: ghcr.io/calvinchengx/emulator-sail:${SAIL_ENGINE_VERSION:?see versions.env}@${SAIL_ENGINE_DIGEST:?see versions.env}
     depends_on:
       fabric-emulator: {condition: service_healthy}
@@ -119,6 +152,7 @@ services:
       SAIL_SPARK__SESSION_TIMEOUT_SECS: "3600"
 
   spark-agent:
+    mem_limit: 1g
     image: ghcr.io/calvinchengx/emulator-spark-agent:${SPARK_CLIENT_VERSION:?see versions.env}@${SPARK_CLIENT_DIGEST:?see versions.env}
     depends_on:
       sail: {condition: service_started}
@@ -136,6 +170,7 @@ services:
       retries: 40
 
   airflow:
+    mem_limit: 4g
     build:
       context: ${PRODUCT}/..
       dockerfile: ${PWD}/Dockerfile.worker
