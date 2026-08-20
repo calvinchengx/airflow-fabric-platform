@@ -19,7 +19,7 @@ PASSWORD_FILE := /opt/airflow/simple_auth_manager_passwords.json.generated
 COMPOSE := PRODUCT=$(PRODUCT_ABS) PRODUCT_NAME=$(PRODUCT_NAME) SOURCES=$(SOURCES_ABS) PWD=$(CURDIR) \
            docker compose -p $(PROJECT) -f docker-compose.yml -f $(FRAGMENT)
 
-.PHONY: help up down logs connections creds doctor sources trigger unpause verify
+.PHONY: help up down logs connections creds doctor sources trigger unpause verify lint
 help: ## This list
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t20
 
@@ -196,3 +196,13 @@ doctor: ## Refuse to start against a product that cannot work
 	  echo "  would be missing from the worker and every DAG importing them would"; \
 	  echo "  fail at run time with ModuleNotFoundError."; exit 1; }
 	@echo "platform: $(PRODUCT_NAME) provides pyproject.toml and dags/"
+
+lint: ## Lint this repository's own scripts
+# The PRODUCT's code is linted in the product repository. What is left here is
+# the platform: scripts/, which imports nothing third-party.
+#
+# NO `test` TARGET, and that is a gap rather than a decision: this cell ships
+# no tests/ at all, while databricks-platform-airflow3 and
+# snowflake-platform-airflow3 both carry repo-boundary tests. Porting them is
+# its own change -- this one is about the tooling and the matrix.
+	uv run --frozen --group dev python -m ruff check .
