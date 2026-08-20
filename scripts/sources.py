@@ -125,7 +125,7 @@ def fragment(decl: dict, sources_dir: str, pins: dict) -> dict:
                 "mem_limit": "1536m",
                 "command": ["redpanda", "start", "--mode=dev-container", "--smp=1",
                             "--memory=1G", "--reserve-memory=0M",
-                            f"--kafka-addr=INTERNAL://0.0.0.0:9092",
+                            "--kafka-addr=INTERNAL://0.0.0.0:9092",
                             f"--advertise-kafka-addr=INTERNAL://{broker}:9092"],
                 "healthcheck": {"test": ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"],
                                 "interval": "5s", "timeout": "5s", "retries": 30},
