@@ -74,8 +74,20 @@ def fragment(decl: dict, sources_dir: str, pins: dict) -> dict:
                 # killed this container instead -- measured, `contoso-pos`
                 # Exited(137) OOMKilled mid-witness, surfacing as a vendor
                 # extraction failure two layers away.
-                "environment": {"GOMEMLIMIT": "2GiB"},
-                "mem_limit": "2560m",
+                # GOMEMLIMIT IS A SOFT TARGET and mem_limit is a hard kill, so
+                # the gap between them is Go's room to collect before Docker
+                # intervenes. 2GiB under a 2560m cap left 400MB of headroom and
+                # died serving the orders export -- measured, `OOM=true
+                # limit=2684354560`, mid-pagination.
+                #
+                # SIZED FROM THE WRONG MOMENT the first time: `docker stats`
+                # showed this vendor at 159MiB, which is what it costs while
+                # IDLE. A mokapi service holds request and response bodies, and
+                # the export is 176MB of CSV per call, so its peak is an order
+                # of magnitude above its resting size. A ceiling read off a
+                # quiet stack is not a ceiling.
+                "environment": {"GOMEMLIMIT": "3GiB"},
+                "mem_limit": "4g",
                 "volumes": [f"{sources_dir}:/sources:ro"],
                 "expose": [str(v["port"])],
             }
