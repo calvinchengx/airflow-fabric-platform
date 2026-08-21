@@ -99,6 +99,16 @@ jobs:
         run: |
           python3 scripts/set_release.py "${{ steps.target.outputs.version }}"
           git --no-pager diff --stat versions.env
+      # THE BYTES, not just the declaration checked out above. Without this the
+      # vendors' fixtures -- the exports and the .api-key each one enforces --
+      # do not exist, and mokapi does not fail on that: it generates bodies from
+      # the schema and answers every request 200. This workflow had never run
+      # the step, which the vendor healthcheck now catches at `make up` rather
+      # than letting a medallion build on invented rows. The third platform
+      # this week to need exactly this line.
+      - name: Materialise the vendor exports
+        run: make sources
+        working-directory: contoso-sources
       - run: make up PRODUCT=../contoso-data-product-fabric-airflow3 SOURCES=../contoso-sources
       # VERIFY_TIMEOUT SITS INSIDE timeout-minutes, on purpose. The default is
       # 3600s against a 45-minute job, so a wedged run was cancelled by GitHub

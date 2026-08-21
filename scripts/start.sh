@@ -184,7 +184,22 @@ for v in vendors:
     # its own key that rotates separately -- that is the point of there being
     # more than one vendor, and sharing one here would erase it.
     key_file = root / v["data"] / ".api-key"
-    key = key_file.read_text().strip() if key_file.exists() else ""
+    # A MISSING FIXTURE IS A REFUSAL, not an empty password. This used to fall
+    # back to "", and the chain that followed degraded in silence at every
+    # link: the connection was provisioned with no key, the DAG sent
+    # `X-API-Key: ` to a vendor whose fixture was absent, and that vendor --
+    # mokapi with nothing to serve -- answered 200 with bodies generated from
+    # the OpenAPI schema. Invented rows, reported as ingested. Nothing in CI
+    # could see it until the vendors got a healthcheck that asks whether
+    # they are enforcing anything, at which point the first fresh stack
+    # failed on exactly this. The engine-native platforms refuse here and
+    # say what to run; this is their wording.
+    if not key_file.exists():
+        raise SystemExit(
+            f"platform: vendor {v['name']!r} declares data={v['data']!r} but "
+            f"{key_file} does not exist -- run the sources repo's fixture "
+            f"step first; guessing the key would authenticate against nothing.")
+    key = key_file.read_text().strip()
     # IDEMPOTENT, and LOUD when it fails. Provisioning runs on every start
     # against a metadata DB that may already carry these -- an existing
     # connection is the normal case on restart, not an error. It used to be
