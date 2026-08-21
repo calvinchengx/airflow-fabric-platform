@@ -90,6 +90,27 @@ def fragment(decl: dict, sources_dir: str, pins: dict) -> dict:
                 "mem_limit": "4g",
                 "volumes": [f"{sources_dir}:/sources:ro"],
                 "expose": [str(v["port"])],
+                # HEALTHY MEANS THE VENDOR ENFORCES ITS CREDENTIAL, not that a
+                # port is open. Without its fixture mokapi does not fail: it
+                # GENERATES bodies from the OpenAPI schema and answers every
+                # request 200, wrong key included. The route comes from the
+                # declaration; wget exits non-zero on 401, which is the healthy
+                # case here -- hence the inverted test. Ported verbatim from the
+                # engine-native platforms, which had it; this one did not, and
+                # nothing here could therefore wait for a vendor.
+                "healthcheck": {
+                    "test": ["CMD-SHELL",
+                             f"wget -q -O /dev/null "
+                             f"--header='X-Api-Key: definitely-not-the-key' "
+                             f"http://localhost:{v['port']}{v['health']} "
+                             f"&& exit 1 || exit 0"],
+                    "interval": "10s", "timeout": "5s", "retries": 5,
+                } if v.get("health") else {
+                    "test": ["CMD-SHELL",
+                             f"wget -q -O /dev/null http://localhost:{v['port']}/ "
+                             f"|| test $? -ne 4"],
+                    "interval": "10s", "timeout": "5s", "retries": 5,
+                },
             }
         elif kind == "cdc":
             # THREE SERVICES, because a change stream needs all three and any
@@ -206,6 +227,26 @@ def fragment(decl: dict, sources_dir: str, pins: dict) -> dict:
                 f"platform: vendor {v['name']!r} declares kind={kind!r}, which this "
                 f"platform does not know how to run. Add it here or fix the "
                 f"declaration; guessing would stand up the wrong vendor.")
+
+    # THE SCHEDULER WAITS FOR THE WORLD IT SCHEDULES INTO. A fresh stack starts
+    # a catch-up run of the DAG the moment the scheduler sees it, and the base
+    # compose has `airflow` depending on postgres and fabric-emulator only --
+    # so that run's first tasks were hitting vendors still starting and an ERP
+    # seed still replaying 93,571 events. Measured: the adopted catch-up run
+    # was still retrying at 45 minutes, where a triggered run on a settled
+    # stack takes seven, because `make verify`'s own scan-wait had always been
+    # the accidental settle time. This fragment extends `airflow` so compose
+    # itself holds the scheduler back: a vendor must be healthy, and a seed --
+    # a step, not a server -- must have COMPLETED, not merely started. Compose
+    # merges `depends_on` across files, which is what lets the generated half
+    # of the stack gate a service the base half declares.
+    gates = {}
+    for n, svc in services.items():
+        if svc.get("restart") == "no":
+            gates[n] = {"condition": "service_completed_successfully"}
+        elif "healthcheck" in svc:
+            gates[n] = {"condition": "service_healthy"}
+    services["airflow"] = {"depends_on": gates}
     return {"services": services}
 
 

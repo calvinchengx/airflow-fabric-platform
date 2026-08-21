@@ -100,7 +100,13 @@ jobs:
           python3 scripts/set_release.py "${{ steps.target.outputs.version }}"
           git --no-pager diff --stat versions.env
       - run: make up PRODUCT=../contoso-data-product-fabric-airflow3 SOURCES=../contoso-sources
-      - run: make verify DAG=contoso_daily PRODUCT=../contoso-data-product-fabric-airflow3 SOURCES=../contoso-sources
+      # VERIFY_TIMEOUT SITS INSIDE timeout-minutes, on purpose. The default is
+      # 3600s against a 45-minute job, so a wedged run was cancelled by GitHub
+      # before verify could print which task it was waiting on -- the first
+      # adoption run ended exactly that way, with no verdict and no diagnosis.
+      # A settled stack finishes this DAG in seven to fifteen minutes; 1800s
+      # is twice the worst of those and still leaves the job time to say why.
+      - run: make verify DAG=contoso_daily VERIFY_TIMEOUT=1800 PRODUCT=../contoso-data-product-fabric-airflow3 SOURCES=../contoso-sources
       # ADOPT WHAT THIS RUN JUST PROVED. Everything above ran against the
       # dispatched version, so by here the pin has been verified end to end and
       # is sitting uncommitted in the working tree. Discarding it and asking a
