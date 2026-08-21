@@ -165,7 +165,13 @@ services:
       AZURE_STORAGE_ENDPOINT: "https://fabric-emulator:9443/onelake"
       AZURE_ALLOW_INVALID_CERTIFICATES: "true"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8099/health || exit 1"]
+      # THE IMAGE HAS NO CURL. This probe could never pass, so the agent sat
+      # `unhealthy` from first boot while /health answered 200 the whole time.
+      # Nothing gates on it, which is why it went unnoticed -- and is also why
+      # it mattered: the one container permanently red trains you to read red
+      # as normal here. Every other compose file in the family probes it with
+      # the interpreter the image actually ships.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/health', timeout=3)"]
       interval: 5s
       timeout: 3s
       retries: 40
