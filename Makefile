@@ -70,6 +70,23 @@ verify: ## Run a DAG and FAIL if it fails:  make verify DAG=contoso_daily
 # starts a catch-up run ALONGSIDE this one: two runs writing the same tables,
 # which is how a witness stops being one. Refusing with the command printed is
 # the smaller surprise.
+#
+# IT ADOPTS A RUN ALREADY IN FLIGHT, when there is exactly one. A fresh stack
+# starts a catch-up run of its own the moment the metadata database exists,
+# and with max_active_runs 1 that run owns the only slot. This used to refuse
+# and point at `make kill-runs`, which was honest and made EVERY nightly
+# acceptance fail, because the nightly builds a fresh stack every time. The
+# hatch could not simply be dropped into the workflow either: the catch-up run
+# only appears after the scan this target waits for, and killing it marks
+# database state without stopping the worker's processes, so the trigger that
+# followed would race a half-finished run for the same tables.
+#
+# Adopting is the stronger witness, not the weaker one. It is the same DAG on
+# the same data from the same empty catalog, and the SCHEDULER dispatched it
+# rather than a hand -- which is closer to what DoD 3 asks for, not further.
+# The verdict is still for one explicit run-id, found before anything is
+# triggered, so "the most recent run" never decides. Two or more in flight is
+# the one case nobody can adopt, and that still refuses.
 	@test -n "$(DAG)" || { echo "usage: make verify DAG=<dag_id>"; exit 2; }
 # IT WAITS FOR THE DAG TO EXIST, and that is not politeness. `make up` recreates
 # the metadata database, so for the first tens of seconds afterwards EVERY DAG
@@ -103,17 +120,22 @@ verify: ## Run a DAG and FAIL if it fails:  make verify DAG=contoso_daily
 	    exit 1; }; \
 	  busy=$$($(COMPOSE) exec -T airflow airflow dags list-runs $(DAG) -o plain 2>/dev/null \
 	    | awk '$$3 == "running" || $$3 == "queued" {print $$2}' | head -3); \
-	  test -z "$$busy" || { \
-	    echo "$(DAG) already has a run in flight, and max_active_runs is 1:"; \
+	  nbusy=$$(echo "$$busy" | grep -c .); \
+	  test "$$nbusy" -le 1 || { \
+	    echo "$(DAG) has $$nbusy runs in flight, and max_active_runs is 1:"; \
 	    for r in $$busy; do echo "  $$r"; done; \
-	    echo "a trigger now would sit QUEUED behind it, and this command would"; \
-	    echo "report 'still unqueued' after $(VERIFY_TIMEOUT)s having named nothing."; \
-	    echo "two runs writing one catalog is also not a witness. wait for it, or:"; \
+	    echo "which of them is the witness is not this command's to guess, and"; \
+	    echo "two runs writing one catalog is not a witness either. wait, or:"; \
 	    echo "  make kill-runs DAG=$(DAG)"; \
 	    exit 1; }; \
-	  run="verify__$$(date -u +%Y%m%dT%H%M%SZ)"; \
-	  echo "platform: $(DAG) -> $$run"; \
-	  $(COMPOSE) exec -T airflow airflow dags trigger $(DAG) --run-id "$$run" >/dev/null; \
+	  if test -n "$$busy"; then \
+	    run="$$busy"; \
+	    echo "platform: $(DAG) -> adopting the run already in flight, $$run"; \
+	  else \
+	    run="verify__$$(date -u +%Y%m%dT%H%M%SZ)"; \
+	    echo "platform: $(DAG) -> $$run"; \
+	    $(COMPOSE) exec -T airflow airflow dags trigger $(DAG) --run-id "$$run" >/dev/null; \
+	  fi; \
 	  waited=0; \
 	  while :; do \
 	    state=$$($(COMPOSE) exec -T airflow airflow dags list-runs $(DAG) -o plain 2>/dev/null \
@@ -139,11 +161,11 @@ verify: ## Run a DAG and FAIL if it fails:  make verify DAG=contoso_daily
 	  exit 1
 
 kill-runs: ## Mark every in-flight run of a DAG failed:  make kill-runs DAG=contoso_daily
-# THE ESCAPE HATCH `verify` POINTS AT. A fresh stack starts a CATCH-UP run of
-# its own the moment the metadata database is created -- nobody unpaused
-# anything -- and with max_active_runs 1 that run owns the only slot. Every
-# later trigger queues behind it, which is what "still unqueued after 3600s"
-# actually meant, three times in one evening.
+# THE ESCAPE HATCH `verify` POINTS AT when MORE THAN ONE run is in flight. A
+# single catch-up run is adopted as the witness now; this is for the state
+# nobody can adopt, two runs writing one catalog. Every later trigger queues
+# behind them, which is what "still unqueued after 3600s" actually meant,
+# three times in one evening.
 #
 # Deliberately not `dags backfill --reset-dagruns` or a pause: this only ends
 # runs that are already in flight, so a witness starts from a quiet DAG
