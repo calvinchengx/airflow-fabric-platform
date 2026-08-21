@@ -187,6 +187,12 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       fabric-emulator: {condition: service_healthy}
+      # THE DAG'S SILVER RUNS ON SAIL THROUGH THE AGENT, and sail has no
+      # healthcheck of its own; the agent's /health is the first thing that
+      # answers only once Sail does. Without this a fresh stack's catch-up
+      # run reached its dbt-over-Livy tasks before there was an engine.
+      spark-agent:
+        condition: service_healthy
     environment:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
       AIRFLOW__CORE__EXECUTOR: LocalExecutor

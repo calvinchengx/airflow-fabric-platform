@@ -99,8 +99,24 @@ jobs:
         run: |
           python3 scripts/set_release.py "${{ steps.target.outputs.version }}"
           git --no-pager diff --stat versions.env
+      # THE BYTES, not just the declaration checked out above. Without this the
+      # vendors' fixtures -- the exports and the .api-key each one enforces --
+      # do not exist, and mokapi does not fail on that: it generates bodies from
+      # the schema and answers every request 200. This workflow had never run
+      # the step, which the vendor healthcheck now catches at `make up` rather
+      # than letting a medallion build on invented rows. The third platform
+      # this week to need exactly this line.
+      - name: Materialise the vendor exports
+        run: make sources
+        working-directory: contoso-sources
       - run: make up PRODUCT=../contoso-data-product-fabric-airflow3 SOURCES=../contoso-sources
-      - run: make verify DAG=contoso_daily PRODUCT=../contoso-data-product-fabric-airflow3 SOURCES=../contoso-sources
+      # VERIFY_TIMEOUT SITS INSIDE timeout-minutes, on purpose. The default is
+      # 3600s against a 45-minute job, so a wedged run was cancelled by GitHub
+      # before verify could print which task it was waiting on -- the first
+      # adoption run ended exactly that way, with no verdict and no diagnosis.
+      # A settled stack finishes this DAG in seven to fifteen minutes; 1800s
+      # is twice the worst of those and still leaves the job time to say why.
+      - run: make verify DAG=contoso_daily VERIFY_TIMEOUT=1800 PRODUCT=../contoso-data-product-fabric-airflow3 SOURCES=../contoso-sources
       # ADOPT WHAT THIS RUN JUST PROVED. Everything above ran against the
       # dispatched version, so by here the pin has been verified end to end and
       # is sitting uncommitted in the working tree. Discarding it and asking a
