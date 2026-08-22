@@ -253,6 +253,20 @@ services:
       ENTRA_CLIENT_ID: "${ENTRA_CLIENT_ID:-00d88624-f0d7-46f6-a641-6232c2608928}"
       ENTRA_CLIENT_SECRET: "${ENTRA_CLIENT_SECRET:-daemon-app-secret}"
       FABRIC_TARGET: emulator
+      # WHERE THE PRODUCT PUBLISHES ITS NUMBERS. The platform owns deployment
+      # facts, so it says where; the product asks (`contoso_airflow.snapshot`)
+      # rather than deriving a path from its own __file__, which is how the
+      # sibling cell ended up writing into site-packages.
+      #
+      # /tmp, NOT A MOUNT. Every other route out of this container has cost a
+      # day to a uid mismatch -- four instances in one evening, counting G48
+      # and G49 -- because a bind mount created by the runner belongs to root
+      # and the worker is not root. /tmp is writable by construction, tasks run
+      # in this container under the LocalExecutor so they all see it, and
+      # `make snapshot` copies the file out with `docker compose cp`.
+      #
+      # Read by `make snapshot`; the two must agree and a test says so.
+      PRODUCT_SNAPSHOT: /tmp/product_snapshot.json
       SOURCES_DECL: /sources/sources.yaml
       # WHERE STATEMENTS GO, on the worker too -- not only on the emulator.
       # Bronze registers each Delta table with the engine's catalog through

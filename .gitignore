@@ -2,3 +2,5 @@ product
 *.pyc
 __pycache__/
 .sources.generated.yml
+# The numbers a particular run produced, copied out by `make snapshot`.
+product_snapshot.json

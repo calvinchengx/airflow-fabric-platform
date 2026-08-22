@@ -51,6 +51,22 @@ jobs:
         with:
           repository: calvinchengx/contoso-data-product-fabric-airflow3
           path: contoso-data-product-fabric-airflow3
+      # THE FAMILY'S FIGURES, from the repository that owns them. Not the
+      # product and not a dependency of this platform: the last step of this
+      # job runs one script out of this checkout to hold the run's snapshot to
+      # the numbers every cell must produce.
+      #
+      # PINNED BY SHA, not tracking main. Core's own rules say a release is the
+      # unit of change and nothing tracks main, and a nightly whose expectations
+      # can move without a reviewed commit here is a nightly that can be turned
+      # green by editing another repository. A SHA is also what this workflow
+      # already does for every third-party action. Move it deliberately, and
+      # only when the family's numbers move.
+      - uses: actions/checkout@v7
+        with:
+          repository: calvinchengx/contoso-data-product
+          ref: 2cf7bae8a1e1f4a8cddd2cd5510d435e16febb3b
+          path: contoso-data-product
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.32"
@@ -117,6 +133,22 @@ jobs:
       # A settled stack finishes this DAG in seven to fifteen minutes; 1800s
       # is twice the worst of those and still leaves the job time to say why.
       - run: make verify DAG=contoso_daily VERIFY_TIMEOUT=1800 PRODUCT=../contoso-data-product-fabric-airflow3 SOURCES=../contoso-sources
+      # BRING THE NUMBERS OUT OF THE WORKER. The DAG's `publish` task writes
+      # them inside the container; without this step nothing outside can read
+      # them, which is why this cell had no unattended figure at all.
+      - run: make snapshot PRODUCT=../contoso-data-product-fabric-airflow3 SOURCES=../contoso-sources
+      # THE NUMBERS, not merely the run (G50). Everything above proves the DAG
+      # ran green; this is the only step that can fail because gold returned
+      # different money.
+      #
+      # No `if: always()`. A failed DAG has no numbers worth checking, and a
+      # missing snapshot after a SUCCESSFUL run is a finding the script reports
+      # as one rather than skipping.
+      - name: Assert the figures core publishes
+        run: |
+          python3 ../contoso-data-product/scripts/assert_snapshot.py \
+            --label fabric-platform-airflow3 \
+            product_snapshot.json
       # ADOPT WHAT THIS RUN JUST PROVED. Everything above ran against the
       # dispatched version, so by here the pin has been verified end to end and
       # is sitting uncommitted in the working tree. Discarding it and asking a

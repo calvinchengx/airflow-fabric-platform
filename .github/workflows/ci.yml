@@ -42,6 +42,7 @@ jobs:
         run: choco install make --no-progress -y
         working-directory: ${{ github.workspace }}
       - run: uv sync --frozen --group dev
+      - run: make test
       - run: make lint
       # ruff was not configured or run at all before this, so nothing described
       # the intention, let alone guaranteed it.
