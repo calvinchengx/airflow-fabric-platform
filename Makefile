@@ -14,12 +14,17 @@ include versions.env
 export
 
 FRAGMENT := .sources.generated.yml
+# THE TWO ENDS OF `make snapshot`. The first must equal compose's
+# PRODUCT_SNAPSHOT -- the product writes there and this reads there -- and
+# tests/test_repo.py compares them rather than trusting this comment.
+SNAPSHOT_IN_WORKER ?= /tmp/product_snapshot.json
+SNAPSHOT_OUT ?= product_snapshot.json
 # Where Airflow 3's simple auth manager writes the credential it generates.
 PASSWORD_FILE := /opt/airflow/simple_auth_manager_passwords.json.generated
 COMPOSE := PRODUCT=$(PRODUCT_ABS) PRODUCT_NAME=$(PRODUCT_NAME) SOURCES=$(SOURCES_ABS) PWD=$(CURDIR) \
            docker compose -p $(PROJECT) -f docker-compose.yml -f $(FRAGMENT)
 
-.PHONY: help up down logs connections creds doctor sources trigger unpause verify lint
+.PHONY: help up down logs connections creds doctor sources trigger unpause verify snapshot lint test
 help: ## This list
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t20
 
@@ -219,12 +224,25 @@ doctor: ## Refuse to start against a product that cannot work
 	  echo "  fail at run time with ModuleNotFoundError."; exit 1; }
 	@echo "platform: $(PRODUCT_NAME) provides pyproject.toml and dags/"
 
+snapshot: ## Copy the run's published numbers out of the worker (needs `make verify` first)
+# THE EVIDENCE, OUT OF THE CONTAINER. The DAG's `publish` task writes
+# PRODUCT_SNAPSHOT inside the worker; nothing outside could read it, which is
+# half of why this cell had no figure any unattended run could be held to (G50).
+#
+# `docker compose cp` rather than a mount, for the reason compose states beside
+# PRODUCT_SNAPSHOT: a bind mount created by a CI runner belongs to root and the
+# worker is not root, and that has cost this family four separate days.
+	$(COMPOSE) cp airflow:$(SNAPSHOT_IN_WORKER) $(SNAPSHOT_OUT)
+	@echo "platform: wrote $(SNAPSHOT_OUT)"
+
+test: ## The repo's own boundary tests -- no Docker, no emulator, no product
+	uv run --frozen --group dev python -m pytest tests -q
+
 lint: ## Lint this repository's own scripts
 # The PRODUCT's code is linted in the product repository. What is left here is
 # the platform: scripts/, which imports nothing third-party.
 #
-# NO `test` TARGET, and that is a gap rather than a decision: this cell ships
-# no tests/ at all, while databricks-platform-airflow3 and
-# snowflake-platform-airflow3 both carry repo-boundary tests. Porting them is
-# its own change -- this one is about the tooling and the matrix.
+# There is a `test` target now, though tests/ holds ONE test rather than the
+# suite the sibling airflow3 platforms carry. Porting those is still its own
+# change; this one exists so the G50 wiring below cannot be silently removed.
 	uv run --frozen --group dev python -m ruff check .
